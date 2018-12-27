@@ -14,6 +14,20 @@ TIMESYMBOLS = {
 	'customary_ext' : ('sec', 'min', 'hour', 'day', 'week', 'month', 'year'),
 }
 
+# def bytes2human(n, format='%(value).1f %(symbol)s', symbols='customary'):
+	# n = int(n)
+	# if n < 0:
+		# raise ValueError("n < 0")
+	# symbols = SYMBOLS[symbols]
+	# prefix = {}
+	# for i, s in enumerate(symbols[1:]):
+		# prefix[s] = 1 << (i+1)*10
+	# for symbol in reversed(symbols[1:]):
+		# if n >= prefix[symbol]:
+			# value = float(n) / prefix[symbol]
+			# return format % locals()
+	# return format % dict(symbol=symbols[0], value=n)
+
 def human2seconds(s):
 	init = s
 	prefix= {}
@@ -35,6 +49,9 @@ def human2seconds(s):
 			break
 	else:
 		raise ValueError("can't interpret %r" % init)
+	#prefix = {sset[0]:1}
+	#for i, s in enumerate(sset[1:]):
+	#	prefix[s] = 1 << (i+1)*10
 	return int(num * prefix[letter])
 
 SYMBOLS = {
@@ -59,7 +76,7 @@ def human2bytes(s):
     for i, s in enumerate(sset[1:]):
         prefix[s] = 1 << (i+1)*10
     return int(num * prefix[letter])
-	
+
 def hashArchivo(ruta):
 	hash_md5 = hashlib.md5()
 	try:
@@ -78,7 +95,7 @@ def removeIfEmpty(dir, raiz=0):
 		if not os.listdir(dir):
 			print 'borrando directorio vacio '+ dir
 			os.rmdir(dir)	
-	
+
 def removeOldFiles(backupset, starttime):
 	global db
 	cursor = db.cursor()
@@ -92,11 +109,11 @@ def removeOldFiles(backupset, starttime):
 				print 'error al borrar '+ row[0]
 	cursor.execute('DELETE FROM files WHERE backupset='+ str(backupset) +' AND backupdate<'+ str(starttime) +'')
 	db.commit()
-	
+
 def removeEmpyFolders(origen, destino, backupset):
 	dirDestino = destino + os.path.basename(os.path.split(origen)[0]) + str(backupset) + os.path.sep
 	removeIfEmpty(dirDestino, 1)
-	
+
 def backupFolder(origen, destino, backupset):
 	global db
 	global opt
@@ -129,27 +146,32 @@ def backupFolder(origen, destino, backupset):
 				logger.info('archivo demasiado grande '+ rutaActual)
 				continue
 			hashActual = hashArchivo(rutaActual)
-			cursor.execute('SELECT id, backuphash FROM files WHERE backupset='+ str(backupset) +' AND originalpath="'+ rutaActual +'"')
+			dirDestino = os.path.normpath(str(root).replace(origen, destino + os.path.basename(os.path.split(origen)[0]) + str(backupset) + os.path.sep))
+			rutaDestino = os.path.join(dirDestino, file)
+			cursor.execute('SELECT id, backuphash FROM files WHERE backupset='+ str(backupset) +' AND backuppath="'+ rutaDestino +'"')
 			for row in cursor.fetchall():
 				archivoEncontrado = 1
 				idActual = row[0]
 				if not row[1] == hashActual:
 					archivoModificado = 1
-			dirDestino = os.path.normpath(str(root).replace(origen, destino + os.path.basename(os.path.split(origen)[0]) + str(backupset) + os.path.sep))
-			rutaDestino = os.path.join(dirDestino, file)
 			if archivoEncontrado:
 				if archivoModificado:
 					print 'archivo modificado '+ rutaActual +' a '+ rutaDestino
 					try:
+						if not (os.path.isdir(dirDestino)):
+							os.makedirs(dirDestino)
 						shutil.copy(rutaActual, rutaDestino)
+						cursor.execute('UPDATE files SET backuphash=?, backupdate=? WHERE id=?', (hashActual, time.time(), idActual))
+						db.commit()
 					except:
 						print 'error al copiar '+ rutaActual +' a '+ rutaDestino
 						logger.error('error al copiar '+ rutaActual +' a '+ rutaDestino)
-					cursor.execute('UPDATE files SET backuphash=?, backupdate=? WHERE id=?', (hashActual, time.time(), idActual))
-					db.commit()
 				else:
-					cursor.execute('UPDATE files SET backupdate=? WHERE id=?', (time.time(), idActual))
-					db.commit()
+					if os.path.isfile(rutaDestino):
+						cursor.execute('UPDATE files SET backupdate=? WHERE id=?', (time.time(), idActual))
+						db.commit()
+					else:
+						print 'respaldo perdido '+ rutaDestino 
 			else:
 				if not (os.path.isdir(dirDestino)):
 					os.makedirs(dirDestino)
@@ -170,8 +192,7 @@ parser.add_argument('-n', type=int, default=3)
 parser.add_argument('-r', default='1M')
 parser.add_argument('-exclude', action="append", nargs='*')
 
-opt = parser.parse_args()				
-
+opt = parser.parse_args()
 starttime = time.time()
 db = sqlite3.connect('pybackup.db')
 db.text_factory = lambda x: unicode(x, "utf-8", "ignore")
@@ -185,34 +206,41 @@ for logdir in opt.d:
 		logdir = logdir + os.path.sep 
 	if not (os.path.isdir(logdir)):
 		os.makedirs(logdir)
-		
+
 logger = logging.getLogger('pybackup')
 hdlr = logging.FileHandler(logdir + 'pybackup.log')
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 hdlr.setFormatter(formatter)
 logger.addHandler(hdlr)
 logger.setLevel(logging.INFO)
+
 backupset = 1 + int(time.time() / human2seconds(opt.r)) % opt.n
+
 logger.info('iniciando backup')
 logger.info('backup set '+ str(backupset))
 
+
 for destino in opt.d:
+	if not destino.endswith(os.path.sep):
+		destino = destino + os.path.sep
+	if not (os.path.isdir(destino)):
+		try:
+			os.makedirs(destino)
+		except:
+			print 'no se puede escribir en el destino '+ destino
 	for origen in opt.o:
 		if not origen.endswith(os.path.sep):
 			origen = origen + os.path.sep
-		if not destino.endswith(os.path.sep):
-			destino = destino + os.path.sep
 		backupFolder(origen, destino, backupset)
 
 removeOldFiles(backupset, starttime)
 
 for destino in opt.d:
+	if not destino.endswith(os.path.sep):
+		destino = destino + os.path.sep
 	for origen in opt.o:
 		if not origen.endswith(os.path.sep):
 			origen = origen + os.path.sep
-		if not destino.endswith(os.path.sep):
-			destino = destino + os.path.sep
-		
 		removeEmpyFolders(origen, destino, backupset)
 
 logger.info('backup terminado')
