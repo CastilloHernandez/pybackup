@@ -96,10 +96,19 @@ def removeIfEmpty(dir, raiz=0):
 			print 'borrando directorio vacio '+ dir
 			os.rmdir(dir)	
 
-def removeOldFiles(backupset, starttime):
+def renewFiles(backupset):
 	global db
 	cursor = db.cursor()
-	cursor.execute('SELECT backuppath FROM files WHERE backupset='+ str(backupset) +' AND backupdate<'+ str(starttime) +'')
+	for destino in opt.d:
+		if not destino.endswith(os.path.sep):
+			destino = destino + os.path.sep
+			cursor.execute('UPDATE files SET obsolete=1 WHERE backupset=? AND backupdest=?', (backupset, destino))
+			db.commit()
+			
+def removeOldFiles(backupset):
+	global db
+	cursor = db.cursor()
+	cursor.execute('SELECT backuppath FROM files WHERE backupset='+ str(backupset) +' AND obsolete=1')
 	for row in cursor.fetchall():
 		if os.path.isfile(row[0]):
 			print 'archivo obsoleto '+ row[0]
@@ -107,7 +116,7 @@ def removeOldFiles(backupset, starttime):
 				os.remove(row[0])
 			except:
 				print 'error al borrar '+ row[0]
-	cursor.execute('DELETE FROM files WHERE backupset='+ str(backupset) +' AND backupdate<'+ str(starttime) +'')
+	cursor.execute('DELETE FROM files WHERE backupset='+ str(backupset) +' AND obsolete=1')
 	db.commit()
 
 def removeEmpyFolders(origen, destino, backupset):
@@ -161,24 +170,34 @@ def backupFolder(origen, destino, backupset):
 						if not (os.path.isdir(dirDestino)):
 							os.makedirs(dirDestino)
 						shutil.copy(rutaActual, rutaDestino)
-						cursor.execute('UPDATE files SET backuphash=?, backupdate=? WHERE id=?', (hashActual, time.time(), idActual))
+						cursor.execute('UPDATE files SET backuphash=?, backupdate=?, obsolete=? WHERE id=?', (hashActual, time.time(), 0, idActual))
 						db.commit()
 					except:
 						print 'error al copiar '+ rutaActual +' a '+ rutaDestino
 						logger.error('error al copiar '+ rutaActual +' a '+ rutaDestino)
 				else:
 					if os.path.isfile(rutaDestino):
-						cursor.execute('UPDATE files SET backupdate=? WHERE id=?', (time.time(), idActual))
+						cursor.execute('UPDATE files SET backupdate=?, obsolete=? WHERE id=?', (time.time(), 0, idActual))
 						db.commit()
 					else:
 						print 'respaldo perdido '+ rutaDestino 
+						try:
+							print 'copiando archivo '+ rutaActual +' a '+ rutaDestino
+							if not (os.path.isdir(dirDestino)):
+								os.makedirs(dirDestino)
+							shutil.copy(rutaActual, rutaDestino)
+							cursor.execute('UPDATE files SET backuphash=?, backupdate=?, obsolete=? WHERE id=?', (hashArchivo(rutaDestino), time.time(), 0, idActual))
+							db.commit()
+						except:
+							print 'error al copiar '+ rutaActual +' a '+ rutaDestino
+							logger.error('error al copiar '+ rutaActual +' a '+ rutaDestino)
 			else:
 				if not (os.path.isdir(dirDestino)):
 					os.makedirs(dirDestino)
 				print 'copiar archivo '+ rutaActual +' a '+ rutaDestino
 				try:
 					shutil.copy(rutaActual, rutaDestino)
-					cursor.execute('INSERT INTO files(backupset, originalpath, originalname, backuppath, backupsize, backuphash, backupdate) VALUES(?, ?,?,?,?,?,?)', (backupset, rutaActual, file, rutaDestino, 0, hashActual, time.time() ))
+					cursor.execute('INSERT INTO files(backupset, originalpath, originalname, backuppath, backupdest, obsolete, backuphash, backupdate) VALUES(?,?,?,?,?,?,?,?)', (backupset, rutaActual, file, rutaDestino, destino, 0, hashActual, time.time() ))
 					db.commit()
 				except:
 					print 'error al copiar '+ rutaActual +' a '+ rutaDestino
@@ -198,7 +217,7 @@ db = sqlite3.connect('pybackup.db')
 db.text_factory = lambda x: unicode(x, "utf-8", "ignore")
 
 cursor = db.cursor()
-cursor.execute('CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, backupset INTEGER, originalpath TEXT, originalname TEXT, backuppath TEXT, backupsize INTEGER, backuphash TEXT, backupdate INTEGER)')
+cursor.execute('CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, backupset INTEGER, originalpath TEXT, originalname TEXT, backuppath TEXT, backupdest TEXT, obsolete INTEGER, backuphash TEXT, backupdate INTEGER)')
 db.commit()
 
 for logdir in opt.d:
@@ -217,8 +236,10 @@ logger.setLevel(logging.INFO)
 backupset = 1 + int(time.time() / human2seconds(opt.r)) % opt.n
 
 logger.info('iniciando backup')
+logger.info('version 0.9')
 logger.info('backup set '+ str(backupset))
 
+renewFiles(backupset)
 
 for destino in opt.d:
 	if not destino.endswith(os.path.sep):
@@ -233,7 +254,7 @@ for destino in opt.d:
 			origen = origen + os.path.sep
 		backupFolder(origen, destino, backupset)
 
-removeOldFiles(backupset, starttime)
+removeOldFiles(backupset)
 
 for destino in opt.d:
 	if not destino.endswith(os.path.sep):
