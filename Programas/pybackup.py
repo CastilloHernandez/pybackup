@@ -9,24 +9,7 @@ import re
 import itertools
 import logging
 
-TIMESYMBOLS = {
-	'customary'	 : ('s', 'm', 'h', 'D', 'w', 'M', 'Y'),
-	'customary_ext' : ('sec', 'min', 'hour', 'day', 'week', 'month', 'year'),
-}
-
-# def bytes2human(n, format='%(value).1f %(symbol)s', symbols='customary'):
-	# n = int(n)
-	# if n < 0:
-		# raise ValueError("n < 0")
-	# symbols = SYMBOLS[symbols]
-	# prefix = {}
-	# for i, s in enumerate(symbols[1:]):
-		# prefix[s] = 1 << (i+1)*10
-	# for symbol in reversed(symbols[1:]):
-		# if n >= prefix[symbol]:
-			# value = float(n) / prefix[symbol]
-			# return format % locals()
-	# return format % dict(symbol=symbols[0], value=n)
+TIMESYMBOLS = {'customary' : ('s', 'm', 'h', 'D', 'w', 'M', 'Y'),'customary_ext' : ('sec', 'min', 'hour', 'day', 'week', 'month', 'year'),}
 
 def human2seconds(s):
 	init = s
@@ -49,33 +32,27 @@ def human2seconds(s):
 			break
 	else:
 		raise ValueError("can't interpret %r" % init)
-	#prefix = {sset[0]:1}
-	#for i, s in enumerate(sset[1:]):
-	#	prefix[s] = 1 << (i+1)*10
 	return int(num * prefix[letter])
 
-SYMBOLS = {
-    'customary'     : ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'),
-    'customary_ext' : ('byte', 'kilo', 'mega', 'giga', 'tera', 'peta', 'exa', 'zetta', 'iotta'),
-}
+SYMBOLS = {'customary' : ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'),'customary_ext' : ('byte', 'kilo', 'mega', 'giga', 'tera', 'peta', 'exa', 'zetta', 'iotta'),}
 
 def human2bytes(s):
-    init = s
-    num = ""
-    while s and s[0:1].isdigit() or s[0:1] == '.':
-        num += s[0]
-        s = s[1:]
-    num = float(num)
-    letter = s.strip()
-    for name, sset in SYMBOLS.items():
-        if letter in sset:
-            break
-    else:
-        raise ValueError("can't interpret %r" % init)
-    prefix = {sset[0]:1}
-    for i, s in enumerate(sset[1:]):
-        prefix[s] = 1 << (i+1)*10
-    return int(num * prefix[letter])
+	init = s
+	num = ""
+	while s and s[0:1].isdigit() or s[0:1] == '.':
+		num += s[0]
+		s = s[1:]
+	num = float(num)
+	letter = s.strip()
+	for name, sset in SYMBOLS.items():
+		if letter in sset:
+			break
+	else:
+		raise ValueError("can't interpret %r" % init)
+	prefix = {sset[0]:1}
+	for i, s in enumerate(sset[1:]):
+		prefix[s] = 1 << (i+1)*10
+	return int(num * prefix[letter])
 
 def hashArchivo(ruta):
 	hash_md5 = hashlib.md5()
@@ -94,21 +71,31 @@ def removeIfEmpty(dir, raiz=0):
 	if raiz == 0:
 		if not os.listdir(dir):
 			print 'borrando directorio vacio '+ dir
-			os.rmdir(dir)	
+			try:
+				os.rmdir(dir)
+			except:
+				print 'error al borrar directorio '+ dir
 
 def renewFiles(backupset):
 	global db
+	global opt
 	cursor = db.cursor()
 	for destino in opt.d:
 		if not destino.endswith(os.path.sep):
 			destino = destino + os.path.sep
-			cursor.execute('UPDATE files SET obsolete=1 WHERE backupset=? AND backupdest=?', (backupset, destino))
-			db.commit()
-			
+		print 'd '+ destino 
+		cursor.execute('SELECT backuppath FROM files WHERE backupset=? AND backupdest=? AND backupdate<?',(backupset, destino, time.time() - human2seconds(opt.r)))
+		for row in cursor.fetchall():
+			if os.path.isfile(row[0]):
+				print 'archivo obsoleto '+ row[0]
+		cursor.execute('UPDATE files SET obsolete=1 WHERE backupset=? AND backupdest=? AND backupdate<?', (backupset, destino, time.time() - human2seconds(opt.r)))
+		db.commit()
+
 def removeOldFiles(backupset):
 	global db
 	cursor = db.cursor()
-	cursor.execute('SELECT backuppath FROM files WHERE backupset='+ str(backupset) +' AND obsolete=1')
+
+	cursor.execute('SELECT backuppath FROM files WHERE backupset=? AND obsolete=?',(backupset, 1))
 	for row in cursor.fetchall():
 		if os.path.isfile(row[0]):
 			print 'archivo obsoleto '+ row[0]
@@ -116,7 +103,7 @@ def removeOldFiles(backupset):
 				os.remove(row[0])
 			except:
 				print 'error al borrar '+ row[0]
-	cursor.execute('DELETE FROM files WHERE backupset='+ str(backupset) +' AND obsolete=1')
+	cursor.execute('DELETE FROM files WHERE backupset=? AND obsolete=?',(backupset, 1))
 	db.commit()
 
 def removeEmpyFolders(origen, destino, backupset):
@@ -177,7 +164,7 @@ def backupFolder(origen, destino, backupset):
 						logger.error('error al copiar '+ rutaActual +' a '+ rutaDestino)
 				else:
 					if os.path.isfile(rutaDestino):
-						cursor.execute('UPDATE files SET backupdate=?, obsolete=? WHERE id=?', (time.time(), 0, idActual))
+						cursor.execute('UPDATE files SET obsolete=? WHERE id=?', (0, idActual))
 						db.commit()
 					else:
 						print 'respaldo perdido '+ rutaDestino 
@@ -236,7 +223,8 @@ logger.setLevel(logging.INFO)
 backupset = 1 + int(time.time() / human2seconds(opt.r)) % opt.n
 
 logger.info('iniciando backup')
-logger.info('version 0.9')
+logger.info('version 0.91')
+print 'backup set '+ str(backupset)
 logger.info('backup set '+ str(backupset))
 
 renewFiles(backupset)
